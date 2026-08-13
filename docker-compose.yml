@@ -1,0 +1,25 @@
+services:
+  jobmanager:
+    build: .
+    image: streaming-starter-flink
+    platform: linux/amd64
+    ports:
+      - "8081:8081"          # Flink Web UI
+    command: jobmanager
+    environment:
+      - |
+        FLINK_PROPERTIES=
+        jobmanager.rpc.address: jobmanager
+
+  taskmanager:
+    image: streaming-starter-flink
+    platform: linux/amd64
+    depends_on:
+      - jobmanager
+    command: taskmanager
+    scale: 1
+    environment:
+      - |
+        FLINK_PROPERTIES=
+        jobmanager.rpc.address: jobmanager
+        taskmanager.numberOfTaskSlots: 2
