@@ -45,16 +45,26 @@ synthetic trade events  →  keyBy(symbol)  →  running sum(qty)  →  print
 
 ## The one thing this taught me (worth knowing)
 
-The first version used a **processing-time** tumbling window — and it emitted **nothing**. Reason: the bounded source produces all events in milliseconds and the job finishes long before a 5-second wall-clock timer fires, so the window never triggers. Real windowing on bounded/finite data needs **event time + watermarks**, which fire deterministically on end-of-input. That processing-time-vs-event-time distinction is the core of stream processing — so windowing is v1, done properly with event time.
+### v0: a processing-time tumbling window.
+
+The first version used a **processing-time** tumbling window and it emitted **nothing**. Reason: the bounded source produces all events in milliseconds and the job finishes long before a 5-second wall-clock timer fires, so the window never triggers. Real windowing on bounded/finite data needs **event time + watermarks**, which fire deterministically on end-of-input.
+
+### v1: a watermark is a periodic signal, not a per-event calculation
+
+I predicted the out-of-order trade `("MSFT", 9, 3s)` would be dropped as late: it arrives after
+a trade at 26s, far past the 5s bound. It was counted instead (MSFT [0,10) = 17, not 8).
+
+Why: Flink emits watermarks on a wall-clock timer (`pipeline.auto-watermark-interval`, default
+200 ms), not after every record. The bounded source pushed all 12 trades through in a few
+milliseconds, before the first tick, so the watermark never advanced mid-stream.
 
 ## Where this is going (roadmap)
 
 - [x] **v0 — hello world:** bounded source, keyed running sum, on a real Flink cluster. _(this)_
-- [ ] **v1 — event-time windowing:** assign timestamps + watermarks, tumbling event-time windows per symbol (fires correctly on bounded and live data).
+- [x] **v1 — event-time windowing:** assign timestamps + watermarks, tumbling event-time windows per symbol (fires correctly on bounded and live data).
 - [ ] **v2 — live source:** replace the bounded list with a continuous feed (SEC EDGAR API or a generated market-data stream).
 - [ ] **v3 — serve + harden:** expose results via a small API; add an architecture diagram, cost notes, and a "what I'd change at 100k events/sec" section.
 
 ## Notes
 
 - Base image `flink:1.18.1-scala_2.12-java11`; PyFlink pinned to the same `1.18.1`, image built `linux/amd64` (PyFlink's `pemja` has no ARM64 wheel, so amd64 avoids a from-source build on Apple Silicon).
-- `print()` writes to the TaskManager's stdout; in this cluster that surfaces via `docker compose logs taskmanager`, not the log4j app logs.

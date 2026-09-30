@@ -6,6 +6,8 @@ services:
     ports:
       - "8081:8081"          # Flink Web UI
     command: jobmanager
+    volumes:
+      - ./:/opt/job          # live-mount jobs: edit locally, no rebuild
     environment:
       - |
         FLINK_PROPERTIES=
@@ -17,6 +19,8 @@ services:
     depends_on:
       - jobmanager
     command: taskmanager
+    volumes:
+      - ./:/opt/job
     scale: 1
     environment:
       - |
