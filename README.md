@@ -35,6 +35,37 @@ Expected output (running per-symbol totals as events arrive):
 ('MSFT', 3)
 ```
 
+### Run v2 (live Kafka source)
+
+v2 needs Kafka, which `docker-compose.yml` starts alongside Flink. Steps 1–2 return straight away.
+Steps 3 and 4 keep running, so use two terminals (run 4 in a second one):
+
+```bash
+# 1. Build and start the docker containers
+docker compose up -d --build
+
+# 2. Submit the job first.
+docker compose exec jobmanager flink run -d -py /opt/job/job_v2.py
+
+# 3. Start the producer: one trade every ~200 ms, with deliberate stragglers
+docker compose exec jobmanager python /opt/job/producer.py
+
+# 4. Watch window summaries and late trades
+docker compose logs -f --since 1m taskmanager | grep -E 'AAPL|MSFT|GOOG|LATE'
+```
+
+The job never finishes on its own (the source is unbounded). Stop the producer with Ctrl+C and cancel the job in the Flink UI (http://localhost:8081 → the job → Cancel) before resubmitting, otherwise two copies run and every line prints twice.
+
+Expected output: one summary per symbol every 10s as `(symbol, window_start, window_end, total_qty, n_trades)`, plus about two late trades per window:
+
+```
+LATE: ('AAPL', 1, 1792766696859)
+LATE: ('GOOG', 8, 1792766701952)
+(MSFT,1792766710000,1792766720000,116,19)
+(GOOG,1792766710000,1792766720000,68,12)
+(AAPL,1792766710000,1792766720000,42,8)
+```
+
 ## What it does
 
 ```
@@ -58,12 +89,21 @@ Why: Flink emits watermarks on a wall-clock timer (`pipeline.auto-watermark-inte
 200 ms), not after every record. The bounded source pushed all 12 trades through in a few
 milliseconds, before the first tick, so the watermark never advanced mid-stream.
 
+### v2: with a live source, late data is real
+
+- **What I ran:** `producer.py` → Kafka → Flink, 10s event-time windows, 5s out-of-orderness bound. Every 10th trade is stamped 3s in the past, every 25th 20s in the past.
+- **What happened:** The 3s stragglers were absorbed into their windows. The 20s stragglers went to the late-data side output (~2 per window), and each window's trade count dropped by exactly that much.
+- **Contrast with v1:** There the bounded source finished before the first watermark tick, so the clock never moved and nothing was late. With a live source the watermark advances between trades, and the theory finally matches reality.
+
 ## Where this is going (roadmap)
 
 - [x] **v0 — hello world:** bounded source, keyed running sum, on a real Flink cluster. _(this)_
 - [x] **v1 — event-time windowing:** assign timestamps + watermarks, tumbling event-time windows per symbol (fires correctly on bounded and live data).
-- [ ] **v2 — live source:** replace the bounded list with a continuous feed (SEC EDGAR API or a generated market-data stream).
-- [ ] **v3 — serve + harden:** expose results via a small API; add an architecture diagram, cost notes, and a "what I'd change at 100k events/sec" section.
+- [x] **v2 — live source:** Kafka feed from `producer.py` (with out-of-order stragglers and an `account_id`), late trades routed to a side output instead of silently dropped. _(`job_v2.py`, `producer.py`)_
+- [ ] **v3 — the lake:** sink to **Apache Iceberg** tables on MinIO (S3-compatible) via a REST catalog, partitioned by day, with account IDs **HMAC-hashed** before they land.
+- [ ] **v4 — the model:** dbt + DuckDB star schema (`fct_trade`, `dim_symbol`, `dim_date`, `dim_account` as SCD2), with tests and a reconciliation check against the producer's control totals.
+- [ ] **v5 — serve + harden:** architecture diagram, a small query API, an "AWS mapping" with cost estimates, and a "what I'd change at 100k events/sec" section.
+- [ ] **v6 — Spark on the same lake:** PySpark batch rollup, Iceberg compaction, late-data backfill.
 
 ## Notes
 

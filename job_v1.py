@@ -102,10 +102,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
-# --- STRETCH (after it works) -----------------------------------------------
-# Late events are dropped *silently* by default. Capture them instead:
-# look up `side_output_late_data(OutputTag)` and `get_side_output(...)`,
-# and print late records with a "LATE:" prefix. Then try `.allowed_lateness()`
-# and describe in one sentence how it differs from out-of-orderness.
