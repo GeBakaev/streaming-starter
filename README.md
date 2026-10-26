@@ -37,20 +37,26 @@ Expected output (running per-symbol totals as events arrive):
 
 ### Run v2 (live Kafka source)
 
-v2 needs Kafka, which `docker-compose.yml` starts alongside Flink. Steps 1–2 return straight away.
-Steps 3 and 4 keep running, so use two terminals (run 4 in a second one):
+v2 needs Kafka, which `docker-compose.yml` starts alongside Flink. Steps 1–3 return straight away.
+Steps 4 and 5 keep running, so use two terminals (run 5 in a second one):
 
 ```bash
 # 1. Build and start the docker containers
 docker compose up -d --build
 
-# 2. Submit the job first.
+# 2. Create the `trades` topic (Kafka has no persistent storage here, so topics
+#    are lost when the container is recreated). Safe to run every time.
+docker compose exec kafka /opt/kafka/bin/kafka-topics.sh \
+  --bootstrap-server localhost:9092 \
+  --create --if-not-exists --topic trades --partitions 1 --replication-factor 1
+
+# 3. Submit the job.
 docker compose exec jobmanager flink run -d -py /opt/job/job_v2.py
 
-# 3. Start the producer: one trade every ~200 ms, with deliberate stragglers
+# 4. Start the producer: one trade every ~200 ms, with deliberate stragglers
 docker compose exec jobmanager python /opt/job/producer.py
 
-# 4. Watch window summaries and late trades
+# 5. Watch window summaries and late trades
 docker compose logs -f --since 1m taskmanager | grep -E 'AAPL|MSFT|GOOG|LATE'
 ```
 
