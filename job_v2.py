@@ -95,6 +95,7 @@ def main():
         # Optional: keep each window open 20s after it fires. Late trades within that
         # time update the window, which fires again with a correction, instead of
         # going to the side output.
+        # .allowed_lateness(20_000)
         .side_output_late_data(late_tag)
         .process(
             WindowSummary(),
