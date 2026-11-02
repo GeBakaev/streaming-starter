@@ -17,6 +17,67 @@ services:
       KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
       KAFKA_NUM_PARTITIONS: 1 # one partition keeps watermarks simple
 
+  # ---------- v3: the lake ----------
+  # SeaweedFS: S3-compatible object storage (stands in for Amazon S3 locally).
+  # (MinIO was the first choice, but its images were pulled from Docker Hub and
+  # quay.io in 2026.) Local dev mode: S3 API on :8333, no auth.
+  seaweedfs:
+    image: chrislusf/seaweedfs:latest
+    command: server -s3 -dir=/data -ip=seaweedfs -ip.bind=0.0.0.0
+    ports:
+      - "8333:8333"
+
+  # One-shot helper: object stores don't create buckets on demand, so create `warehouse`.
+  s3-init:
+    image: amazon/aws-cli
+    depends_on:
+      - seaweedfs
+    entrypoint: >
+      /bin/sh -c "
+      until aws --endpoint-url http://seaweedfs:8333 s3 ls >/dev/null 2>&1; do sleep 1; done;
+      aws --endpoint-url http://seaweedfs:8333 s3 mb s3://warehouse || true;
+      aws --endpoint-url http://seaweedfs:8333 s3 ls;
+      "
+    environment:
+      AWS_ACCESS_KEY_ID: ${S3_ACCESS_KEY:-admin}
+      AWS_SECRET_ACCESS_KEY: ${S3_SECRET_KEY:-password}
+      AWS_REGION: us-east-1
+
+  # Iceberg REST catalog: keeps track of which tables exist and their current snapshot.
+  # (Plays the role AWS Glue Data Catalog would in the cloud.)
+  iceberg-rest:
+    image: apache/iceberg-rest-fixture
+    depends_on:
+      - s3-init
+    ports:
+      - "8181:8181"
+    environment:
+      AWS_ACCESS_KEY_ID: ${S3_ACCESS_KEY:-admin}
+      AWS_SECRET_ACCESS_KEY: ${S3_SECRET_KEY:-password}
+      AWS_REGION: us-east-1
+      CATALOG_WAREHOUSE: s3://warehouse/
+      CATALOG_IO__IMPL: org.apache.iceberg.aws.s3.S3FileIO
+      CATALOG_S3_ENDPOINT: http://seaweedfs:8333
+      CATALOG_S3_PATH__STYLE__ACCESS: "true"
+      CATALOG_URI: jdbc:sqlite:file:/tmp/catalog.db
+
+  # Tools container (not started by default): reads the Iceberg tables back.
+  #   docker compose run --rm lake-tools python /work/check_lake.py
+  lake-tools:
+    profiles: ["tools"]
+    build:
+      context: .
+      dockerfile_inline: |
+        FROM python:3.11-slim
+        RUN pip install --no-cache-dir "pyiceberg[pyarrow,pandas]"
+    volumes:
+      - ./:/work
+    environment:
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:-admin}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:-password}
+    depends_on:
+      - iceberg-rest
+
   jobmanager:
     build: .
     image: streaming-starter-flink
@@ -26,12 +87,19 @@ services:
     command: jobmanager
     depends_on:
       - kafka
+      - iceberg-rest
     volumes:
       - ./:/opt/job
     environment:
       - |
         FLINK_PROPERTIES=
         jobmanager.rpc.address: jobmanager
+      # v3: credentials for the S3 store (S3FileIO reads the standard AWS variables)
+      - AWS_ACCESS_KEY_ID=${S3_ACCESS_KEY:-admin}
+      - AWS_SECRET_ACCESS_KEY=${S3_SECRET_KEY:-password}
+      - AWS_REGION=us-east-1
+      # v3: secret key for hashing account_id. Set it in .env (see .env.example).
+      - HMAC_KEY=${HMAC_KEY:-local-dev-only-not-a-real-secret}
 
   taskmanager:
     image: streaming-starter-flink
@@ -39,6 +107,7 @@ services:
     depends_on:
       - jobmanager
       - kafka
+      - iceberg-rest
     command: taskmanager
     volumes:
       - ./:/opt/job
@@ -48,3 +117,9 @@ services:
         FLINK_PROPERTIES=
         jobmanager.rpc.address: jobmanager
         taskmanager.numberOfTaskSlots: 2
+      # v3: credentials for the S3 store (S3FileIO reads the standard AWS variables)
+      - AWS_ACCESS_KEY_ID=${S3_ACCESS_KEY:-admin}
+      - AWS_SECRET_ACCESS_KEY=${S3_SECRET_KEY:-password}
+      - AWS_REGION=us-east-1
+      # v3: secret key for hashing account_id. Set it in .env (see .env.example).
+      - HMAC_KEY=${HMAC_KEY:-local-dev-only-not-a-real-secret}

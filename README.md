@@ -113,4 +113,5 @@ milliseconds, before the first tick, so the watermark never advanced mid-stream.
 
 ## Notes
 
-- Base image `flink:1.18.1-scala_2.12-java11`; PyFlink pinned to the same `1.18.1`, image built `linux/amd64` (PyFlink's `pemja` has no ARM64 wheel, so amd64 avoids a from-source build on Apple Silicon).
+- Base image `flink:2.1.3-scala_2.12-java21`; PyFlink pinned to the same `2.1.3`, image built `linux/amd64` (PyFlink's `pemja` has no ARM64 Linux wheel, so amd64 avoids a from-source build on Apple Silicon).
+- Why Flink 2.1 and not 2.3: as of Oct 2026, 2.1 is the newest Flink with *released* connectors for both Kafka (`5.0.0-2.1`) and Iceberg (`iceberg-flink-runtime-2.1`). v0–v2 were first built on Flink 1.18.
