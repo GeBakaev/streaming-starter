@@ -8,3 +8,6 @@ venv/
 
 # local secrets (see .env.example)
 .env
+
+# producer control totals
+control/

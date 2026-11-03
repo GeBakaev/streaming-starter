@@ -7,12 +7,17 @@ Sends one trade every ~200 ms to the `trades` topic as JSON:
 Some trades are deliberately stamped in the past (stragglers), so the Flink
 job has real out-of-order and late data to deal with.
 
+v3: it also writes per-minute CONTROL TOTALS (trade count + total qty per
+event-time minute) to control/control_totals.jsonl. That's the "rows you SHOULD
+have" reference: Week 4 reconciles the lake against it.
+
 Run it (inside the Flink container, which has kafka-python installed):
     docker compose exec jobmanager python /opt/job/producer.py
 Stop it with Ctrl+C.
 """
 
 import json
+import os
 import random
 import time
 
@@ -20,6 +25,10 @@ from kafka import KafkaProducer
 
 TOPIC = "trades"
 SYMBOLS = ["AAPL", "MSFT", "GOOG"]
+
+# Control totals land in the repo folder (mounted at /opt/job), git-ignored.
+CONTROL_FILE = "/opt/job/control/control_totals.jsonl"
+MAX_STRAGGLER_MS = 20_000  # the oldest a trade's ts can be when it's sent
 
 producer = KafkaProducer(
     bootstrap_servers="kafka:9092",
@@ -31,7 +40,37 @@ def now_ms() -> int:
     return int(time.time() * 1000)
 
 
+def add_to_totals(totals: dict, trade: dict) -> None:
+    minute_start = trade["ts"] - (trade["ts"] % 60_000)
+    if totals.get(minute_start) is None:
+        totals[minute_start] = {"n_trades": 0, "total_qty": 0}
+    totals[minute_start]["n_trades"] += 1
+    totals[minute_start]["total_qty"] += trade["qty"]
+
+
+def flush_closed_minutes(totals: dict) -> None:
+    now = now_ms()
+    closed_minutes = []
+    for minute_start in list(totals.keys()):
+        if now > minute_start + 60_000 + MAX_STRAGGLER_MS:
+            closed_minutes.append(minute_start)
+
+    if closed_minutes:
+        os.makedirs(os.path.dirname(CONTROL_FILE), exist_ok=True)
+        with open(CONTROL_FILE, "a") as f:
+            for minute_start in closed_minutes:
+                total = totals[minute_start]
+                record = {
+                    "minute_start": minute_start,
+                    "n_trades": total["n_trades"],
+                    "total_qty": total["total_qty"],
+                }
+                f.write(json.dumps(record) + "\n")
+                del totals[minute_start]
+
+
 def main():
+    totals = {}
     i = 0
     while True:
         i += 1
@@ -53,6 +92,11 @@ def main():
         # send it to Kafka, print it, and sleep 200 ms
         producer.send(TOPIC, trade)
         print(f"produced: {trade}")
+
+        # write in the control totals
+        add_to_totals(totals, trade)
+        flush_closed_minutes(totals)
+
         time.sleep(0.2)
 
 
